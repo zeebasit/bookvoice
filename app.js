@@ -492,7 +492,8 @@ async function initialize() {
   el.voice.addEventListener('change', () => {
     selectedVoice = el.voice.value;
     localStorage.setItem('bookvoice-voice', selectedVoice);
-    if (speaking || previewUtterance) stopSpeaking();
+    if (speaking) speakFromPosition();
+    else if (previewUtterance) stopSpeaking();
     updateVoiceHint();
   });
   el.previewVoice.addEventListener('click', previewVoice);
