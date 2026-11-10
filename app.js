@@ -8,7 +8,7 @@ const el = {
   player: $('playerSection'), title: $('currentTitle'), format: $('currentFormat'),
   status: $('readingStatus'), progress: $('progressLabel'), remaining: $('remainingLabel'),
   slider: $('seekSlider'), play: $('playButton'), back: $('backButton'), forward: $('forwardButton'),
-  voice: $('voiceSelect'), speed: $('speedSelect'), excerpt: $('bookExcerpt'), toast: $('toast')
+  voice: $('voiceSelect'), speed: $('speedSelect'), previewVoice: $('previewVoiceButton'), voiceHint: $('voiceQualityHint'), excerpt: $('bookExcerpt'), toast: $('toast')
 };
 
 const DB_NAME = 'bookvoice-local-v1';
@@ -21,7 +21,8 @@ let speaking = false;
 let paused = false;
 let generation = 0;
 let selectedVoice = localStorage.getItem('bookvoice-voice') || '';
-let speed = Number(localStorage.getItem('bookvoice-speed')) || 1;
+let speed = Number(localStorage.getItem('bookvoice-speed')) || 0.9;
+let previewUtterance = null;
 let toastTimer = null;
 let saveTimer = null;
 
@@ -147,6 +148,7 @@ async function loadBook(id, scroll = false) {
   el.player.hidden = false;
   localStorage.setItem('bookvoice-last', id);
   renderPlayer();
+  updateVoiceHint();
   await saveBook(active);
   await refreshLibrary();
   if (scroll) el.player.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -177,6 +179,8 @@ function renderPlayer() {
 
 function stopSpeaking() {
   generation++;
+  previewUtterance = null;
+  if (el.previewVoice) el.previewVoice.textContent = '▶ Preview voice';
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   speaking = false;
   paused = false;
@@ -192,7 +196,69 @@ function persistProgress() {
   }, 250);
 }
 
-function getVoice() { return window.speechSynthesis.getVoices().find(voice => voice.voiceURI === selectedVoice) || null; }
+/* A preferred available voice is only a heuristic; Safari cannot expose all iOS premium voices. */
+function scoreVoice(voice, language) {
+  const name = voice.name.toLowerCase();
+  const tag = (voice.lang || '').toLowerCase();
+  const wanted = (language || 'en-US').toLowerCase();
+  const base = wanted.split('-')[0];
+  if (tag.split('-')[0] !== base) return -1000;
+  let score = tag === wanted ? 30 : 12;
+  if (/premium|enhanced|natural|neural|siri/.test(name)) score += 90;
+  if (/^alex$/.test(name)) score += 45;
+  if (/samantha|allison|ava|daniel|karen|moira|serena|zoe|nicky/.test(name)) score += 15;
+  if (voice.default) score += 5;
+  if (/fred|whisper|bells|boing|bubbles|cellos|bad news|good news|zarvox|trinoids|organ|hysterical/.test(name)) score -= 200;
+  return score;
+}
+function getVoice() {
+  const voices = window.speechSynthesis.getVoices();
+  if (selectedVoice) {
+    const chosen = voices.find(voice => voice.voiceURI === selectedVoice);
+    if (chosen) return chosen;
+  }
+  const language = active?.lang || 'en-US';
+  return voices.slice().sort((a,b) => scoreVoice(b,language) - scoreVoice(a,language))[0] && 
+    scoreVoice(voices.slice().sort((a,b) => scoreVoice(b,language) - scoreVoice(a,language))[0],language) > -1000
+      ? voices.slice().sort((a,b) => scoreVoice(b,language) - scoreVoice(a,language))[0] : null;
+}
+function updateVoiceHint() {
+  if (!el.voiceHint || !('speechSynthesis' in window)) return;
+  const voice = getVoice();
+  const label = voice ? `Current voice: ${voice.name} (${voice.lang}).` : 'Using the system voice.';
+  el.voiceHint.textContent = `${label} Safari may not offer the high-quality voices installed on your iPhone.`;
+}
+function previewVoice() {
+  if (!('speechSynthesis' in window)) return notify('This browser does not support speech previews.', true);
+  if (previewUtterance) { stopSpeaking(); return; }
+  stopSpeaking();
+  const voice = getVoice();
+  const isNorwegian = (voice?.lang || active?.lang || '').toLowerCase().startsWith('no') ||
+                      (voice?.lang || active?.lang || '').toLowerCase().startsWith('nb');
+  const sample = isNorwegian
+    ? 'Dette er en liten stemmeprøve. Jeg leser med en rolig og behagelig hastighet.'
+    : 'This is how your book will sound. Take a moment, and enjoy the story as it unfolds.';
+  const utterance = new SpeechSynthesisUtterance(sample);
+  utterance.rate = speed;
+  utterance.pitch = 1;
+  if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
+  else utterance.lang = active?.lang || 'en-US';
+  previewUtterance = utterance;
+  el.previewVoice.textContent = '■ Stop preview';
+  const clear = () => {
+    if (previewUtterance === utterance) {
+      previewUtterance = null;
+      el.previewVoice.textContent = '▶ Preview voice';
+    }
+  };
+  utterance.onend = clear;
+  utterance.onerror = event => {
+    clear();
+    if (event.error !== 'canceled' && event.error !== 'interrupted')
+      notify('Voice preview could not play. Try a different voice.', true);
+  };
+  window.speechSynthesis.speak(utterance);
+}
 function speakFromPosition() {
   if (!active || !chunks.length) return;
   if (!('speechSynthesis' in window)) { notify('Speech is not supported in this browser. Use Safari on an iPhone.', true); return; }
@@ -263,14 +329,16 @@ function populateVoices() {
   if (!('speechSynthesis' in window)) return;
   const voices = window.speechSynthesis.getVoices();
   el.voice.replaceChildren();
-  const defaultOption = document.createElement('option'); defaultOption.value = ''; defaultOption.textContent = 'System default';
+  const defaultOption = document.createElement('option'); defaultOption.value = ''; defaultOption.textContent = 'Recommended available voice (auto)';
   el.voice.append(defaultOption);
-  for (const voice of voices.sort((a,b) => a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name))) {
+  const language = active?.lang || 'en-US';
+  for (const voice of voices.sort((a,b) => scoreVoice(b,language) - scoreVoice(a,language) || a.name.localeCompare(b.name))) {
     const option = document.createElement('option'); option.value = voice.voiceURI;
     option.textContent = `${voice.name} (${voice.lang})${voice.localService ? '' : ' · online voice'}`;
     el.voice.append(option);
   }
   el.voice.value = voices.some(v => v.voiceURI === selectedVoice) ? selectedVoice : '';
+  updateVoiceHint();
 }
 
 /* HTML is parsed only to extract text, never inserted as untrusted markup. */
@@ -406,7 +474,7 @@ const sampleText = `Welcome to BookVoice. This is a short sample so you can hear
 
 async function initialize() {
   el.speed.value = String(speed);
-  if (!el.speed.value || el.speed.selectedIndex < 0) { el.speed.value = '1'; speed = 1; }
+  if (!el.speed.value || el.speed.selectedIndex < 0) { el.speed.value = '0.9'; speed = 0.9; }
   el.add.addEventListener('click', () => el.file.click());
   el.addMore.addEventListener('click', () => el.file.click());
   el.file.addEventListener('change', async () => { const chosen = [...el.file.files]; el.file.value = ''; await handleFiles(chosen); });
@@ -425,12 +493,16 @@ async function initialize() {
   el.voice.addEventListener('change', () => {
     selectedVoice = el.voice.value;
     localStorage.setItem('bookvoice-voice', selectedVoice);
-    if (speaking) speakFromPosition();
+    if (speaking || previewUtterance) stopSpeaking();
+    updateVoiceHint();
   });
+  el.previewVoice.addEventListener('click', previewVoice);
   el.speed.addEventListener('change', () => {
     speed = Number(el.speed.value) || 1;
     localStorage.setItem('bookvoice-speed', String(speed));
-    if (speaking) speakFromPosition(); else renderPlayer();
+    if (speaking) speakFromPosition();
+    else if (previewUtterance) stopSpeaking();
+    else renderPlayer();
   });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') persistProgress(); });
   window.addEventListener('pagehide', () => { if (active) saveBook(active).catch(() => {}); });
