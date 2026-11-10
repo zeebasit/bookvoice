@@ -1,0 +1,16 @@
+{
+  "id": "./",
+  "name": "BookVoice — Personal Audiobook Reader",
+  "short_name": "BookVoice",
+  "description": "Read your own PDF, EPUB, DOCX and text books out loud on your iPhone.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1424",
+  "theme_color": "#111629",
+  "icons": [
+    {"src":"icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
