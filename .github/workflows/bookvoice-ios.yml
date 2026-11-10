@@ -1,0 +1,54 @@
+name: Build BookVoice iPhone Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "native-ios/**"
+      - ".github/workflows/bookvoice-ios.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ios-unsigned:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
+          xcodegen --version
+
+      - name: Generate project and compile for iPhone
+        working-directory: native-ios
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodegen generate --spec project.yml
+          xcodebuild -project BookVoiceLab.xcodeproj -scheme BookVoiceLab -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build > build.log 2>&1 || { tail -n 180 build.log; exit 1; }
+          echo "iOS compilation succeeded."
+
+      - name: Package unsigned IPA for Windows signing
+        working-directory: native-ios
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="build/Build/Products/Release-iphoneos/BookVoiceLab.app"
+          test -d "$APP"
+          mkdir -p output/Payload
+          cp -R "$APP" output/Payload/
+          (cd output && zip -qry BookVoiceLab-unsigned.ipa Payload)
+          test -s output/BookVoiceLab-unsigned.ipa
+
+      - name: Publish IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BookVoiceLab-iPhone-unsigned-IPA
+          path: native-ios/output/BookVoiceLab-unsigned.ipa
+          retention-days: 7
+          if-no-files-found: error
