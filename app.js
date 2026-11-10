@@ -218,9 +218,8 @@ function getVoice() {
     if (chosen) return chosen;
   }
   const language = active?.lang || 'en-US';
-  return voices.slice().sort((a,b) => scoreVoice(b,language) - scoreVoice(a,language))[0] && 
-    scoreVoice(voices.slice().sort((a,b) => scoreVoice(b,language) - scoreVoice(a,language))[0],language) > -1000
-      ? voices.slice().sort((a,b) => scoreVoice(b,language) - scoreVoice(a,language))[0] : null;
+  const ranked = voices.slice().sort((a,b) => scoreVoice(b,language) - scoreVoice(a,language));
+  return ranked.length && scoreVoice(ranked[0], language) > -1000 ? ranked[0] : null;
 }
 function updateVoiceHint() {
   if (!el.voiceHint || !('speechSynthesis' in window)) return;
